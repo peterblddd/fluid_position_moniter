@@ -1,0 +1,17 @@
+[Unit]
+Description=Fluid Position Monitor Bot
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/fluid-bot
+Environment="BOT_TOKEN=your_telegram_bot_token"
+ExecStart=/usr/bin/python3 /opt/fluid-bot/bot.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

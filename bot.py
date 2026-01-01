@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """
 Fluid Position Monitor - Public Telegram Bot
-Multi-chain support with rate limiting
+Multi-chain support with rate limiting and automatic monitoring
 Supports: ETH, BASE, ARBITRUM, PLASMA, POLYGON
 """
 
 import os
 import logging
-from telegram import Update
+import asyncio
+from telegram import Update, Bot
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from fluid_client_multichain import MultiChainFluidClient
 from rate_limiter import RateLimiter
 from chain_config import get_all_chains, get_chain_name
+from database import Database
+from monitor import PositionMonitor
 
 # Configure logging
 logging.basicConfig(
@@ -27,6 +30,8 @@ QUERIES_PER_DAY = 10
 # Global clients
 fluid_client = None
 rate_limiter = None
+database = None
+monitor = None
 
 
 def get_fluid_client():
@@ -43,6 +48,14 @@ def get_rate_limiter():
     if rate_limiter is None:
         rate_limiter = RateLimiter(queries_per_day=QUERIES_PER_DAY)
     return rate_limiter
+
+
+def get_database():
+    """Get or create database"""
+    global database
+    if database is None:
+        database = Database()
+    return database
 
 
 def create_risk_bar(ratio: float, liquidation_threshold: float) -> str:
@@ -165,6 +178,9 @@ I help you monitor lending positions on Fluid Protocol across multiple chains.
 • /help - Show help
 • /stats - View your query statistics
 • /chains - List supported chains
+• /monitor - Monitor an address for alerts
+• /unmonitor - Stop monitoring an address
+• /mymonitors - View your monitored addresses
 
 *Rate Limit:*
 ⏱️ You have 10 queries per day
@@ -216,6 +232,133 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 *All Time:*
    Total Queries: {stats.get('queries_total', 0)}
 """
+    await update.message.reply_text(msg, parse_mode='Markdown')
+
+
+async def monitor_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /monitor command"""
+    user_id = update.effective_user.id
+    
+    if not context.args:
+        msg = """
+📡 *Monitor Address*
+
+Usage: `/monitor <address> [alert_threshold] [critical_threshold]`
+
+*Examples:*
+• `/monitor 0x1247...6cfC`
+• `/monitor 0x1247...6cfC 1.15 1.05`
+
+*Default Thresholds:*
+• Alert (🟠): HF < 1.15
+• Critical (🔴): HF < 1.05
+
+*How it works:*
+1. Bot checks your positions every 30 minutes
+2. Sends Telegram alert if HF drops below threshold
+3. One alert per hour per position (no spam)
+"""
+        await update.message.reply_text(msg, parse_mode='Markdown')
+        return
+    
+    address = context.args[0]
+    alert_threshold = float(context.args[1]) if len(context.args) > 1 else 1.15
+    critical_threshold = float(context.args[2]) if len(context.args) > 2 else 1.05
+    
+    # Validate address
+    if not address.startswith('0x') or len(address) != 42:
+        await update.message.reply_text("❌ Invalid address format")
+        return
+    
+    # Add to database
+    db = get_database()
+    success = db.add_monitored_address(user_id, address, alert_threshold, critical_threshold)
+    
+    if success:
+        msg = f"""
+✅ *Monitoring Started*
+
+📍 Address: `{address[:10]}...{address[-8:]}`
+🟠 Alert Threshold: HF < {alert_threshold}
+🔴 Critical Threshold: HF < {critical_threshold}
+
+⏱️ Checks every 30 minutes
+🔔 You'll receive alerts via Telegram
+
+Use `/mymonitors` to view all monitored addresses.
+"""
+        await update.message.reply_text(msg, parse_mode='Markdown')
+    else:
+        await update.message.reply_text("❌ Failed to add monitoring")
+
+
+async def unmonitor_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /unmonitor command"""
+    user_id = update.effective_user.id
+    
+    if not context.args:
+        msg = """
+🔕 *Stop Monitoring*
+
+Usage: `/unmonitor <address>`
+
+*Example:*
+• `/unmonitor 0x1247...6cfC`
+
+Use `/mymonitors` to see your monitored addresses.
+"""
+        await update.message.reply_text(msg, parse_mode='Markdown')
+        return
+    
+    address = context.args[0]
+    
+    # Remove from database
+    db = get_database()
+    success = db.remove_monitored_address(user_id, address)
+    
+    if success:
+        msg = f"""
+✅ *Monitoring Stopped*
+
+📍 Address: `{address[:10]}...{address[-8:]}`
+
+You will no longer receive alerts for this address.
+"""
+        await update.message.reply_text(msg, parse_mode='Markdown')
+    else:
+        await update.message.reply_text("❌ Address not found in your monitors")
+
+
+async def mymonitors_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /mymonitors command"""
+    user_id = update.effective_user.id
+    db = get_database()
+    
+    monitored = db.get_monitored_addresses(user_id)
+    
+    if not monitored:
+        msg = """
+📡 *Your Monitored Addresses*
+
+You are not monitoring any addresses yet.
+
+Use `/monitor <address>` to start monitoring.
+"""
+        await update.message.reply_text(msg, parse_mode='Markdown')
+        return
+    
+    msg = "📡 *Your Monitored Addresses*\n\n"
+    
+    for i, (mon_id, address, alert_threshold, critical_threshold) in enumerate(monitored, 1):
+        msg += f"""
+{i}. `{address[:10]}...{address[-8:]}`
+   🟠 Alert: HF < {alert_threshold}
+   🔴 Critical: HF < {critical_threshold}
+
+"""
+    
+    msg += "\nUse `/unmonitor <address>` to stop monitoring."
+    
     await update.message.reply_text(msg, parse_mode='Markdown')
 
 
@@ -332,6 +475,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def start_monitor_task(application: Application):
+    """Start the monitoring task in background"""
+    global monitor
+    
+    bot = application.bot
+    db = get_database()
+    monitor = PositionMonitor(bot, db, check_interval=1800)  # 30 minutes
+    
+    logger.info("Starting position monitor...")
+    await monitor.start_monitoring()
+
+
 def main():
     """Start the bot"""
     logger.info("Starting Fluid Position Monitor Bot...")
@@ -343,11 +498,18 @@ def main():
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("chains", chains_command))
     application.add_handler(CommandHandler("stats", stats_command))
+    application.add_handler(CommandHandler("monitor", monitor_command))
+    application.add_handler(CommandHandler("unmonitor", unmonitor_command))
+    application.add_handler(CommandHandler("mymonitors", mymonitors_command))
     
     # Add message handler
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
+    # Start monitor task in background
+    asyncio.create_task(start_monitor_task(application))
+    
     logger.info("Bot started and waiting for messages...")
+    logger.info("Position monitor will start shortly...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 

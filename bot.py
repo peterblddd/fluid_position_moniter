@@ -136,9 +136,7 @@ def format_position(pos: dict, chain_name: str = None, show_alerts: bool = False
    Health Factor: {pos['health_factor']:.6f}
    Liquidation Threshold: {pos['liquidation_threshold']:.2f}%
    Status: {get_health_status(pos['health_factor'])}
-{risk_bar}
-{status}
-━━━━━━━━━━━━━━━━━━━━━{alert_text}
+{risk_bar}━━━━━━━━━━━━━━━━━━━━━{alert_text}
 """
     return msg
 

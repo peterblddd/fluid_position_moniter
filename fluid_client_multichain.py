@@ -243,11 +243,15 @@ class MultiChainFluidClient:
             else:
                 ratio = 0
             
+            # Convert liquidation_threshold from basis points to percentage
+            # e.g., 9200 -> 92.00%
+            liquidation_threshold_pct = liquidation_threshold / 100
+            
             # Calculate health factor
-            # liquidation_threshold is in basis points (e.g., 9200 for 92%)
-            # ratio is already in percentage (e.g., 85.77 for 85.77%)
+            # Health Factor = Liquidation Threshold (%) / Collateral Ratio (%)
+            # e.g., 92.00 / 88.94 = 1.034
             if ratio > 0:
-                health_factor = (liquidation_threshold / 100) / ratio
+                health_factor = liquidation_threshold_pct / ratio
             else:
                 health_factor = float('inf')
             
@@ -264,7 +268,7 @@ class MultiChainFluidClient:
                 'health_factor': health_factor,
                 'ratio': ratio,
                 'collateral_factor': collateral_factor / 100,
-                'liquidation_threshold': liquidation_threshold / 100,
+                'liquidation_threshold': liquidation_threshold_pct,
                 'is_liquidated': is_liquidated,
                 'chain': chain,
             }

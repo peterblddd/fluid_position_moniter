@@ -79,12 +79,12 @@ def get_health_status(health_factor: float) -> str:
     """Get health factor status indicator"""
     if health_factor < 1.05:
         return "🔴 CRITICAL (HF < 1.05)"
-    elif health_factor < 1.1:
-        return "🟠 WARNING (HF < 1.1)"
-    elif health_factor < 1.3:
-        return "🟡 CAUTION (HF < 1.3)"
+    elif health_factor < 1.15:
+        return "🟠 WARNING (1.05 ≤ HF < 1.15)"
+    elif health_factor < 1.25:
+        return "🟡 CAUTION (1.15 ≤ HF < 1.25)"
     else:
-        return "🟢 SAFE (HF ≥ 1.3)"
+        return "🟢 SAFE (HF ≥ 1.25)"
 
 
 def format_position(pos: dict, chain_name: str = None, show_alerts: bool = False) -> str:
@@ -93,9 +93,9 @@ def format_position(pos: dict, chain_name: str = None, show_alerts: bool = False
         status = "🔴 LIQUIDATED"
     elif pos['health_factor'] < 1.05:
         status = "🔴 CRITICAL"
-    elif pos['health_factor'] < 1.1:
+    elif pos['health_factor'] < 1.15:
         status = "🟠 WARNING"
-    elif pos['health_factor'] < 1.3:
+    elif pos['health_factor'] < 1.25:
         status = "🟡 CAUTION"
     else:
         status = "🟢 SAFE"
